@@ -477,7 +477,7 @@ static int nvmem_populate_sysfs_cells(struct nvmem_device *nvmem)
 
 	nvmem_cells_group.bin_attrs = cells_attrs;
 
-	ret = devm_device_add_groups(&nvmem->dev, nvmem_cells_groups);
+	ret = device_add_groups(&nvmem->dev, nvmem_cells_groups);
 	if (ret)
 		goto unlock_mutex;
 
@@ -564,8 +564,8 @@ static int nvmem_cell_info_to_nvmem_cell_entry_nodup(struct nvmem_device *nvmem,
 	cell->np = info->np;
 
 	if (cell->nbits)
-		cell->bytes = round_up(DIV_ROUND_UP(cell->nbits + cell->bit_offset,
-					   BITS_PER_BYTE), nvmem->word_size);
+		cell->bytes = DIV_ROUND_UP(cell->nbits + cell->bit_offset,
+					   BITS_PER_BYTE);
 
 	if (!IS_ALIGNED(cell->offset, nvmem->stride)) {
 		dev_err(&nvmem->dev,
@@ -806,6 +806,11 @@ static int nvmem_add_cells_from_dt(struct nvmem_device *nvmem, struct device_nod
 		if (addr && len == (2 * sizeof(u32))) {
 			info.bit_offset = be32_to_cpup(addr++);
 			info.nbits = be32_to_cpup(addr);
+			if (info.bit_offset >= BITS_PER_BYTE || info.nbits < 1) {
+				dev_err(dev, "nvmem: invalid bits on %pOF\n", child);
+				of_node_put(child);
+				return -EINVAL;
+			}
 		}
 
 		info.np = of_node_get(child);
@@ -1594,23 +1599,15 @@ EXPORT_SYMBOL_GPL(nvmem_cell_put);
 static void nvmem_shift_read_buffer_in_place(struct nvmem_cell_entry *cell, void *buf)
 {
 	u8 *p, *b;
-	int i, padding, extra, bit_offset = cell->bit_offset;
-	int bytes = cell->bytes;
+	int i, extra, bit_offset = cell->bit_offset;
 
 	p = b = buf;
 	if (bit_offset) {
-		padding = bit_offset/8;
-		if (padding) {
-		      memmove(buf, buf + padding, bytes - padding);
-		      bit_offset -= BITS_PER_BYTE * padding;
-		      bytes -= padding;
-		}
-
 		/* First shift */
 		*b++ >>= bit_offset;
 
 		/* setup rest of the bytes if any */
-		for (i = 1; i < bytes; i++) {
+		for (i = 1; i < cell->bytes; i++) {
 			/* Get bits from next byte and shift them towards msb */
 			*p |= *b << (BITS_PER_BYTE - bit_offset);
 
@@ -1623,7 +1620,7 @@ static void nvmem_shift_read_buffer_in_place(struct nvmem_cell_entry *cell, void
 	}
 
 	/* result fits in less bytes */
-	extra = bytes - DIV_ROUND_UP(cell->nbits, BITS_PER_BYTE);
+	extra = cell->bytes - DIV_ROUND_UP(cell->nbits, BITS_PER_BYTE);
 	while (--extra >= 0)
 		*p-- = 0;
 

@@ -1032,15 +1032,18 @@ impl Vm {
 
         let mm = mm::Allocator::new(va_range.start, va_range.range(), ())?;
 
-        let binding = Arc::pin_init(Mutex::new_named(
-            VmBinding {
-                binding: None,
-                bind_token: None,
-                active_users: 0,
-                ttb: page_table.cfg().ttbr,
-            },
-            c_str!("VmBinding"),
-        ))?;
+        let binding = Arc::pin_init(
+            Mutex::new_named(
+                VmBinding {
+                    binding: None,
+                    bind_token: None,
+                    active_users: 0,
+                    ttb: page_table.cfg().ttbr,
+                },
+                c_str!("VmBinding"),
+            ),
+            GFP_KERNEL,
+        )?;
 
         let binding_clone = binding.clone();
         Ok(Vm {
@@ -1521,20 +1524,23 @@ impl Uat {
 
         dev_info!(dev, "MMU: Initializing kernel page table\n");
 
-        Arc::pin_init(try_pin_init!(UatInner {
-            handoff_flush <- init::pin_init_array_from_fn(|i| {
-                Mutex::new_named(HandoffFlush(&handoff.flush[i]), c_str!("handoff_flush"))
+        Arc::pin_init(
+            try_pin_init!(UatInner {
+                handoff_flush <- init::pin_init_array_from_fn(|i| {
+                    Mutex::new_named(HandoffFlush(&handoff.flush[i]), c_str!("handoff_flush"))
+                }),
+                shared <- Mutex::new_named(
+                    UatShared {
+                        kernel_ttb1: 0,
+                        map_kernel_to_user: false,
+                        handoff_rgn,
+                        ttbs_rgn,
+                    },
+                    c_str!("uat_shared")
+                ),
             }),
-            shared <- Mutex::new_named(
-                UatShared {
-                    kernel_ttb1: 0,
-                    map_kernel_to_user: false,
-                    handoff_rgn,
-                    ttbs_rgn,
-                },
-                c_str!("uat_shared")
-            ),
-        }))
+            GFP_KERNEL,
+        )
     }
 
     /// Creates a new `Uat` instance given the relevant hardware config.

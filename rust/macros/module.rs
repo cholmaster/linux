@@ -236,6 +236,7 @@ struct ModuleInfo {
     author: Option<String>,
     description: Option<String>,
     alias: Option<Vec<String>>,
+    firmware: Option<Vec<String>>,
     params: Option<Group>,
 }
 
@@ -250,6 +251,7 @@ impl ModuleInfo {
             "description",
             "license",
             "alias",
+            "firmware",
             "params",
         ];
         const REQUIRED_KEYS: &[&str] = &["type", "name", "license"];
@@ -278,6 +280,7 @@ impl ModuleInfo {
                 "description" => info.description = Some(expect_string(it)),
                 "license" => info.license = expect_string_ascii(it),
                 "alias" => info.alias = Some(expect_string_array(it)),
+                "firmware" => info.firmware = Some(expect_string_array(it)),
                 "params" => info.params = Some(expect_group(it)),
                 _ => panic!(
                     "Unknown key \"{}\". Valid keys are: {:?}.",
@@ -332,6 +335,11 @@ pub(crate) fn module(ts: TokenStream) -> TokenStream {
     if let Some(aliases) = info.alias {
         for alias in aliases {
             modinfo.emit("alias", &alias);
+        }
+    }
+    if let Some(firmware) = info.firmware {
+        for fw in firmware {
+            modinfo.emit("firmware", &fw);
         }
     }
 

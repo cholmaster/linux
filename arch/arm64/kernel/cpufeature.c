@@ -1028,7 +1028,7 @@ static void init_cpu_ftr_reg(u32 sys_reg, u64 new)
 extern const struct arm64_cpu_capabilities arm64_errata[];
 static const struct arm64_cpu_capabilities arm64_features[];
 
-void __init
+static void __init
 init_cpucap_indirect_list_from_array(const struct arm64_cpu_capabilities *caps)
 {
 	for (; caps->matches; caps++) {
@@ -1540,8 +1540,8 @@ has_always(const struct arm64_cpu_capabilities *entry, int scope)
 	return true;
 }
 
-bool
-cpufeature_matches(u64 reg, const struct arm64_cpu_capabilities *entry)
+static bool
+feature_matches(u64 reg, const struct arm64_cpu_capabilities *entry)
 {
 	int val, min, max;
 	u64 tmp;
@@ -1594,14 +1594,14 @@ has_user_cpuid_feature(const struct arm64_cpu_capabilities *entry, int scope)
 	if (!mask)
 		return false;
 
-	return cpufeature_matches(val, entry);
+	return feature_matches(val, entry);
 }
 
 static bool
 has_cpuid_feature(const struct arm64_cpu_capabilities *entry, int scope)
 {
 	u64 val = read_scoped_sysreg(entry, scope);
-	return cpufeature_matches(val, entry);
+	return feature_matches(val, entry);
 }
 
 const struct cpumask *system_32bit_el0_cpumask(void)
@@ -2306,6 +2306,14 @@ static void user_feature_fixup(void)
 		regp = get_arm64_ftr_reg(SYS_ID_AA64ISAR1_EL1);
 		if (regp)
 			regp->user_mask &= ~ID_AA64ISAR1_EL1_BF16_MASK;
+	}
+
+	if (cpus_have_cap(ARM64_WORKAROUND_SPECULATIVE_SSBS)) {
+		struct arm64_ftr_reg *regp;
+
+		regp = get_arm64_ftr_reg(SYS_ID_AA64PFR1_EL1);
+		if (regp)
+			regp->user_mask &= ~ID_AA64PFR1_EL1_SSBS_MASK;
 	}
 }
 
@@ -3486,7 +3494,6 @@ void __init setup_boot_cpu_features(void)
 	 * handle the boot CPU.
 	 */
 	init_cpucap_indirect_list();
-	init_cpucap_indirect_list_impdef();
 
 	/*
 	 * Detect broken pseudo-NMI. Must be called _before_ the call to

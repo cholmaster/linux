@@ -490,11 +490,14 @@ impl GpuManager::ver {
             .zip(&mgr.pipes.frag)
             .zip(&mgr.pipes.comp)
         {
-            p_pipes.try_push(fw::initdata::raw::PipeChannels::ver {
-                vtx: v.lock().to_raw(),
-                frag: f.lock().to_raw(),
-                comp: c.lock().to_raw(),
-            })?;
+            p_pipes.push(
+                fw::initdata::raw::PipeChannels::ver {
+                    vtx: v.lock().to_raw(),
+                    frag: f.lock().to_raw(),
+                    comp: c.lock().to_raw(),
+                },
+                GFP_KERNEL,
+            )?;
         }
 
         mgr.as_mut()
@@ -532,7 +535,7 @@ impl GpuManager::ver {
                     raw.sgx_sram_ptr = U64(mapping.iova());
                 });
 
-            mgr.as_mut().io_mappings_mut().try_push(mapping)?;
+            mgr.as_mut().io_mappings_mut().push(mapping, GFP_KERNEL)?;
         }
 
         let mgr = Arc::from(mgr);
@@ -601,7 +604,10 @@ impl GpuManager::ver {
         #[ver(G < G14X)]
         let map_kernel_to_user = false;
 
-        Ok(Box::try_new(mmu::Uat::new(dev, cfg, map_kernel_to_user)?)?)
+        Ok(Box::new(
+            mmu::Uat::new(dev, cfg, map_kernel_to_user)?,
+            GFP_KERNEL,
+        )?)
     }
 
     /// Actually create the final GpuManager instance, as a UniqueArc.
@@ -624,18 +630,36 @@ impl GpuManager::ver {
         };
 
         for _i in 0..=NUM_PIPES - 1 {
-            pipes.vtx.try_push(Box::pin_init(Mutex::new_named(
-                channel::PipeChannel::ver::new(dev, &mut alloc)?,
-                c_str!("pipe_vtx"),
-            ))?)?;
-            pipes.frag.try_push(Box::pin_init(Mutex::new_named(
-                channel::PipeChannel::ver::new(dev, &mut alloc)?,
-                c_str!("pipe_frag"),
-            ))?)?;
-            pipes.comp.try_push(Box::pin_init(Mutex::new_named(
-                channel::PipeChannel::ver::new(dev, &mut alloc)?,
-                c_str!("pipe_comp"),
-            ))?)?;
+            pipes.vtx.push(
+                Box::pin_init(
+                    Mutex::new_named(
+                        channel::PipeChannel::ver::new(dev, &mut alloc)?,
+                        c_str!("pipe_vtx"),
+                    ),
+                    GFP_KERNEL,
+                )?,
+                GFP_KERNEL,
+            )?;
+            pipes.frag.push(
+                Box::pin_init(
+                    Mutex::new_named(
+                        channel::PipeChannel::ver::new(dev, &mut alloc)?,
+                        c_str!("pipe_frag"),
+                    ),
+                    GFP_KERNEL,
+                )?,
+                GFP_KERNEL,
+            )?;
+            pipes.comp.push(
+                Box::pin_init(
+                    Mutex::new_named(
+                        channel::PipeChannel::ver::new(dev, &mut alloc)?,
+                        c_str!("pipe_comp"),
+                    ),
+                    GFP_KERNEL,
+                )?,
+                GFP_KERNEL,
+            )?;
         }
 
         let fwctl_channel = channel::FwCtlChannel::new(dev, &mut alloc)?;
@@ -644,44 +668,53 @@ impl GpuManager::ver {
         let event_manager_clone = event_manager.clone();
         let buffer_mgr_clone = buffer_mgr.clone();
         let alloc_ref = &mut alloc;
-        let rx_channels = Box::init(try_init!(RxChannels::ver {
-            event: channel::EventChannel::ver::new(
-                dev,
-                alloc_ref,
-                event_manager_clone,
-                buffer_mgr_clone,
-            )?,
-            fw_log: channel::FwLogChannel::new(dev, alloc_ref)?,
-            ktrace: channel::KTraceChannel::new(dev, alloc_ref)?,
-            stats: channel::StatsChannel::ver::new(dev, alloc_ref)?,
-        }))?;
+        let rx_channels = Box::init(
+            try_init!(RxChannels::ver {
+                event: channel::EventChannel::ver::new(
+                    dev,
+                    alloc_ref,
+                    event_manager_clone,
+                    buffer_mgr_clone,
+                )?,
+                fw_log: channel::FwLogChannel::new(dev, alloc_ref)?,
+                ktrace: channel::KTraceChannel::new(dev, alloc_ref)?,
+                stats: channel::StatsChannel::ver::new(dev, alloc_ref)?,
+            }),
+            GFP_KERNEL,
+        )?;
 
         let alloc_ref = &mut alloc;
-        let tx_channels = Box::init(try_init!(TxChannels::ver {
-            device_control: channel::DeviceControlChannel::ver::new(dev, alloc_ref)?,
-        }))?;
+        let tx_channels = Box::init(
+            try_init!(TxChannels::ver {
+                device_control: channel::DeviceControlChannel::ver::new(dev, alloc_ref)?,
+            }),
+            GFP_KERNEL,
+        )?;
 
-        let x = UniqueArc::pin_init(try_pin_init!(GpuManager::ver {
-            dev: dev.into(),
-            cfg,
-            dyncfg: *dyncfg,
-            initdata: *initdata,
-            uat: *uat,
-            io_mappings: Vec::new(),
-            next_mmio_iova: IOVA_KERN_MMIO_RANGE.start,
-            rtkit <- Mutex::new_named(None, c_str!("rtkit")),
-            crashed: AtomicBool::new(false),
-            event_manager,
-            alloc <- Mutex::new_named(alloc, c_str!("alloc")),
-            fwctl_channel <- Mutex::new_named(fwctl_channel, c_str!("fwctl_channel")),
-            rx_channels <- Mutex::new_named(*rx_channels, c_str!("rx_channels")),
-            tx_channels <- Mutex::new_named(*tx_channels, c_str!("tx_channels")),
-            pipes,
-            buffer_mgr,
-            ids: Default::default(),
-            garbage_work <- Mutex::new_named(Vec::new(), c_str!("garbage_work")),
-            garbage_contexts <- Mutex::new_named(Vec::new(), c_str!("garbage_contexts")),
-        }))?;
+        let x = UniqueArc::pin_init(
+            try_pin_init!(GpuManager::ver {
+                dev: dev.into(),
+                cfg,
+                dyncfg: *dyncfg,
+                initdata: *initdata,
+                uat: *uat,
+                io_mappings: Vec::new(),
+                next_mmio_iova: IOVA_KERN_MMIO_RANGE.start,
+                rtkit <- Mutex::new_named(None, c_str!("rtkit")),
+                crashed: AtomicBool::new(false),
+                event_manager,
+                alloc <- Mutex::new_named(alloc, c_str!("alloc")),
+                fwctl_channel <- Mutex::new_named(fwctl_channel, c_str!("fwctl_channel")),
+                rx_channels <- Mutex::new_named(*rx_channels, c_str!("rx_channels")),
+                tx_channels <- Mutex::new_named(*tx_channels, c_str!("tx_channels")),
+                pipes,
+                buffer_mgr,
+                ids: Default::default(),
+                garbage_work <- Mutex::new_named(Vec::new(), c_str!("garbage_work")),
+                garbage_contexts <- Mutex::new_named(Vec::new(), c_str!("garbage_contexts")),
+            }),
+            GFP_KERNEL,
+        )?;
 
         Ok(x)
     }
@@ -781,17 +814,20 @@ impl GpuManager::ver {
 
         let node = dev.of_node().ok_or(EIO)?;
 
-        Ok(Box::try_new(hw::DynConfig {
-            pwr: pwr_cfg,
-            uat_ttb_base: uat.ttb_base(),
-            id: gpu_id,
-            firmware_version: node.get_property(c_str!("apple,firmware-version"))?,
-        })?)
+        Ok(Box::new(
+            hw::DynConfig {
+                pwr: pwr_cfg,
+                uat_ttb_base: uat.ttb_base(),
+                id: gpu_id,
+                firmware_version: node.get_property(c_str!("apple,firmware-version"))?,
+            },
+            GFP_KERNEL,
+        )?)
     }
 
     /// Create the global GPU event manager, and return an `Arc<>` to it.
     fn make_event_manager(alloc: &mut KernelAllocators) -> Result<Arc<event::EventManager>> {
-        Ok(Arc::try_new(event::EventManager::new(alloc)?)?)
+        Ok(Arc::new(event::EventManager::new(alloc)?, GFP_KERNEL)?)
     }
 
     /// Create a new MMIO mapping and add it to the mappings list in initdata at the specified
@@ -835,7 +871,7 @@ impl GpuManager::ver {
                     },
                 )?;
 
-                this.as_mut().io_mappings_mut().try_push(mapping)?;
+                this.as_mut().io_mappings_mut().push(mapping, GFP_KERNEL)?;
                 cur_iova += map_size as u64;
             }
         }
@@ -1182,18 +1218,21 @@ impl GpuManager for GpuManager::ver {
     ) -> Result<Box<dyn queue::Queue>> {
         let mut kalloc = self.alloc();
         let id = self.ids.queue.next();
-        Ok(Box::try_new(queue::Queue::ver::new(
-            &self.dev,
-            vm,
-            &mut kalloc,
-            ualloc,
-            ualloc_priv,
-            self.event_manager.clone(),
-            &self.buffer_mgr,
-            id,
-            priority,
-            caps,
-        )?)?)
+        Ok(Box::new(
+            queue::Queue::ver::new(
+                &self.dev,
+                vm,
+                &mut kalloc,
+                ualloc,
+                ualloc_priv,
+                self.event_manager.clone(),
+                &self.buffer_mgr,
+                id,
+                priority,
+                caps,
+            )?,
+            GFP_KERNEL,
+        )?)
     }
 
     fn kick_firmware(&self) -> Result {
@@ -1357,7 +1396,7 @@ impl GpuManager for GpuManager::ver {
     fn add_completed_work(&self, work: Vec<Box<dyn workqueue::GenSubmittedWork>>) {
         let mut garbage = self.garbage_work.lock();
 
-        if garbage.try_reserve(work.len()).is_err() {
+        if garbage.reserve(work.len(), GFP_KERNEL).is_err() {
             dev_err!(
                 self.dev,
                 "Failed to reserve space for completed work, deadlock possible.\n"
@@ -1367,15 +1406,15 @@ impl GpuManager for GpuManager::ver {
 
         for i in work {
             garbage
-                .try_push(i)
-                .expect("try_push() failed after try_reserve()");
+                .push(i, GFP_KERNEL)
+                .expect("push() failed after reserve()");
         }
     }
 
     fn free_context(&self, ctx: Box<fw::types::GpuObject<fw::workqueue::GpuContextData>>) {
         let mut garbage = self.garbage_contexts.lock();
 
-        if garbage.try_push(ctx).is_err() {
+        if garbage.push(ctx, GFP_KERNEL).is_err() {
             dev_err!(
                 self.dev,
                 "Failed to reserve space for freed context, deadlock possible.\n"

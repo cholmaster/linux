@@ -17,6 +17,7 @@
 
 use core::ops::{Deref, DerefMut};
 use kernel::{
+    alloc::{flags::*, vec_ext::VecExt},
     error::{code::*, Result},
     prelude::*,
     str::CStr,
@@ -135,15 +136,18 @@ impl<T: SlotItem> SlotAllocator<T> {
         lock_key1: LockClassKey,
         lock_key2: LockClassKey,
     ) -> Result<SlotAllocator<T>> {
-        let mut slots = Vec::try_with_capacity(num_slots as usize)?;
+        let mut slots = Vec::with_capacity(num_slots as usize, GFP_KERNEL)?;
 
         for i in 0..num_slots {
             slots
-                .try_push(constructor(&mut data, i).map(|item| Entry {
-                    item,
-                    get_time: 0,
-                    drop_time: 0,
-                }))
+                .push(
+                    constructor(&mut data, i).map(|item| Entry {
+                        item,
+                        get_time: 0,
+                        drop_time: 0,
+                    }),
+                    GFP_KERNEL,
+                )
                 .expect("try_push() failed after reservation");
         }
 
@@ -154,12 +158,15 @@ impl<T: SlotItem> SlotAllocator<T> {
             drop_count: 0,
         };
 
-        let alloc = Arc::pin_init(pin_init!(SlotAllocatorOuter {
-            // SAFETY: `mutex_init!` is called below.
-            inner <- Mutex::new_with_key(inner, name, lock_key1),
-            // SAFETY: `condvar_init!` is called below.
-            cond <- CondVar::new(name, lock_key2),
-        }))?;
+        let alloc = Arc::pin_init(
+            pin_init!(SlotAllocatorOuter {
+                // SAFETY: `mutex_init!` is called below.
+                inner <- Mutex::new_with_key(inner, name, lock_key1),
+                // SAFETY: `condvar_init!` is called below.
+                cond <- CondVar::new(name, lock_key2),
+            }),
+            GFP_KERNEL,
+        )?;
 
         Ok(SlotAllocator(alloc))
     }

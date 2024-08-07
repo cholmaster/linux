@@ -24,6 +24,12 @@ pub use lock::spinlock::{new_spinlock, SpinLock};
 pub use lockdep::{LockClassKey, StaticLockClassKey};
 pub use locked_by::LockedBy;
 
+impl Default for StaticLockClassKey {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Defines a new static lock class and returns a pointer to it.
 #[doc(hidden)]
 #[macro_export]

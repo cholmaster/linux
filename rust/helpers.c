@@ -4,7 +4,7 @@
  * cannot be called either. This file explicitly creates functions ("helpers")
  * that wrap those so that they can be called from Rust.
  *
- * Even though Rust kernel modules should never use directly the bindings, some
+ * Even though Rust kernel modules should never use the bindings directly, some
  * of these helpers need to be exported because Rust generics and inlined
  * functions may not get their code generated in the crate where they are
  * defined. Other helpers, called from non-inline functions, may not be
@@ -34,7 +34,9 @@
 #include <linux/dma-resv.h>
 #include <linux/err.h>
 #include <linux/errname.h>
+#include <linux/gfp.h>
 #include <linux/instruction_pointer.h>
+#include <linux/highmem.h>
 #include <linux/lockdep.h>
 #include <linux/mutex.h>
 #include <linux/of.h>
@@ -43,6 +45,7 @@
 #include <linux/refcount.h>
 #include <linux/sched/signal.h>
 #include <linux/siphash.h>
+#include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/timekeeping.h>
 #include <linux/wait.h>
@@ -54,6 +57,26 @@ __noreturn void rust_helper_BUG(void)
 	BUG();
 }
 EXPORT_SYMBOL_GPL(rust_helper_BUG);
+
+unsigned long rust_helper_copy_from_user(void *to, const void __user *from,
+					 unsigned long n)
+{
+	return copy_from_user(to, from, n);
+}
+EXPORT_SYMBOL_GPL(rust_helper_copy_from_user);
+
+unsigned long rust_helper_copy_to_user(void __user *to, const void *from,
+				       unsigned long n)
+{
+	return copy_to_user(to, from, n);
+}
+EXPORT_SYMBOL_GPL(rust_helper_copy_to_user);
+
+unsigned long rust_helper_clear_user(void __user *to, unsigned long n)
+{
+	return clear_user(to, n);
+}
+EXPORT_SYMBOL_GPL(rust_helper_clear_user);
 
 void rust_helper_mutex_lock(struct mutex *lock)
 {
@@ -100,6 +123,24 @@ int rust_helper_signal_pending(struct task_struct *t)
 	return signal_pending(t);
 }
 EXPORT_SYMBOL_GPL(rust_helper_signal_pending);
+
+struct page *rust_helper_alloc_pages(gfp_t gfp_mask, unsigned int order)
+{
+	return alloc_pages(gfp_mask, order);
+}
+EXPORT_SYMBOL_GPL(rust_helper_alloc_pages);
+
+void *rust_helper_kmap_local_page(struct page *page)
+{
+	return kmap_local_page(page);
+}
+EXPORT_SYMBOL_GPL(rust_helper_kmap_local_page);
+
+void rust_helper_kunmap_local(const void *addr)
+{
+	kunmap_local(addr);
+}
+EXPORT_SYMBOL_GPL(rust_helper_kunmap_local);
 
 refcount_t rust_helper_REFCOUNT_INIT(int n)
 {
@@ -186,6 +227,13 @@ void rust_helper_init_work_with_key(struct work_struct *work, work_func_t func,
 }
 EXPORT_SYMBOL_GPL(rust_helper_init_work_with_key);
 
+void * __must_check __realloc_size(2)
+rust_helper_krealloc(const void *objp, size_t new_size, gfp_t flags)
+{
+	return krealloc(objp, new_size, flags);
+}
+EXPORT_SYMBOL_GPL(rust_helper_krealloc);
+
 void rust_helper_lock_acquire_ret(struct lockdep_map *lock, unsigned int subclass,
 				  int trylock, int read, int check,
 				  struct lockdep_map *nest_lock)
@@ -262,24 +310,6 @@ const char *rust_helper_dev_name(const struct device *dev)
 	return dev_name(dev);
 }
 EXPORT_SYMBOL_GPL(rust_helper_dev_name);
-
-unsigned long rust_helper_copy_from_user(void *to, const void __user *from, unsigned long n)
-{
-	return copy_from_user(to, from, n);
-}
-EXPORT_SYMBOL_GPL(rust_helper_copy_from_user);
-
-unsigned long rust_helper_copy_to_user(void __user *to, const void *from, unsigned long n)
-{
-	return copy_to_user(to, from, n);
-}
-EXPORT_SYMBOL_GPL(rust_helper_copy_to_user);
-
-unsigned long rust_helper_clear_user(void __user *to, unsigned long n)
-{
-	return clear_user(to, n);
-}
-EXPORT_SYMBOL_GPL(rust_helper_clear_user);
 
 void __iomem *rust_helper_ioremap(resource_size_t offset, unsigned long size)
 {

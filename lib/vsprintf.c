@@ -966,13 +966,13 @@ char *bdev_name(char *buf, char *end, struct block_device *bdev,
 
 	hd = bdev->bd_disk;
 	buf = string(buf, end, hd->disk_name, spec);
-	if (bdev->bd_partno) {
+	if (bdev_is_partition(bdev)) {
 		if (isdigit(hd->disk_name[strlen(hd->disk_name)-1])) {
 			if (buf < end)
 				*buf = 'p';
 			buf++;
 		}
-		buf = number(buf, end, bdev->bd_partno, spec);
+		buf = number(buf, end, bdev_partno(bdev), spec);
 	}
 	return buf;
 }
@@ -1760,50 +1760,27 @@ char *fourcc_string(char *buf, char *end, const u32 *fourcc,
 	char output[sizeof("0123 little-endian (0x01234567)")];
 	char *p = output;
 	unsigned int i;
-	bool pix_fmt = false;
 	u32 orig, val;
 
-	if (fmt[1] != 'c')
+	if (fmt[1] != 'c' || fmt[2] != 'c')
 		return error_string(buf, end, "(%p4?)", spec);
 
 	if (check_pointer(&buf, end, fourcc, spec))
 		return buf;
 
 	orig = get_unaligned(fourcc);
-	switch (fmt[2]) {
-	case 'h':
-		val = orig;
-		break;
-	case 'r':
-		val = orig = swab32(orig);
-		break;
-	case 'l':
-		val = orig = le32_to_cpu(orig);
-		break;
-	case 'b':
-		val = orig = be32_to_cpu(orig);
-		break;
-	case 'c':
-		/* Pixel formats are printed LSB-first */
-		val = swab32(orig & ~BIT(31));
-		pix_fmt = true;
-		break;
-	default:
-		return error_string(buf, end, "(%p4?)", spec);
-	}
+	val = orig & ~BIT(31);
 
 	for (i = 0; i < sizeof(u32); i++) {
-		unsigned char c = val >> ((3 - i) * 8);
+		unsigned char c = val >> (i * 8);
 
 		/* Print non-control ASCII characters as-is, dot otherwise */
 		*p++ = isascii(c) && isprint(c) ? c : '.';
 	}
 
-	if (pix_fmt) {
-		*p++ = ' ';
-		strcpy(p, orig & BIT(31) ? "big-endian" : "little-endian");
-		p += strlen(p);
-	}
+	*p++ = ' ';
+	strcpy(p, orig & BIT(31) ? "big-endian" : "little-endian");
+	p += strlen(p);
 
 	*p++ = ' ';
 	*p++ = '(';

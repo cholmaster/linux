@@ -133,7 +133,7 @@ impl SyncItem {
     }
 
     fn parse_array(file: &DrmFile, ptr: u64, count: u32, out: bool) -> Result<Vec<SyncItem>> {
-        let mut vec = Vec::try_with_capacity(count as usize)?;
+        let mut vec = Vec::with_capacity(count as usize, GFP_KERNEL)?;
 
         const STRIDE: usize = core::mem::size_of::<uapi::drm_asahi_sync>();
         let size = STRIDE * count as usize;
@@ -150,7 +150,7 @@ impl SyncItem {
             // SAFETY: All bit patterns in the struct are valid
             let sync = unsafe { sync.assume_init() };
 
-            vec.try_push(SyncItem::parse_one(file, sync, out)?)?;
+            vec.push(SyncItem::parse_one(file, sync, out)?, GFP_KERNEL)?;
         }
 
         Ok(vec)
@@ -184,11 +184,14 @@ impl drm::file::DriverFile for File {
         let id = gpu.ids().file.next();
 
         mod_dev_dbg!(device, "[File {}]: DRM device opened\n", id);
-        Ok(Box::into_pin(Box::try_new(Self {
-            id,
-            vms: xarray::XArray::new(xarray::flags::ALLOC1),
-            queues: xarray::XArray::new(xarray::flags::ALLOC1),
-        })?))
+        Ok(Box::into_pin(Box::new(
+            Self {
+                id,
+                vms: xarray::XArray::new(xarray::flags::ALLOC1),
+                queues: xarray::XArray::new(xarray::flags::ALLOC1),
+            },
+            GFP_KERNEL,
+        )?))
     }
 }
 
@@ -334,28 +337,34 @@ impl File {
             file_id,
             id
         );
-        let ualloc = Arc::pin_init(Mutex::new(alloc::DefaultAllocator::new(
-            device,
-            &vm,
-            kernel_gpu_range,
-            buffer::PAGE_SIZE,
-            mmu::PROT_GPU_SHARED_RW,
-            512 * 1024,
-            true,
-            fmt!("File {} VM {} GPU Shared", file_id, id),
-            false,
-        )?))?;
-        let ualloc_priv = Arc::pin_init(Mutex::new(alloc::DefaultAllocator::new(
-            device,
-            &vm,
-            kernel_gpufw_range,
-            buffer::PAGE_SIZE,
-            mmu::PROT_GPU_FW_PRIV_RW,
-            64 * 1024,
-            true,
-            fmt!("File {} VM {} GPU FW Private", file_id, id),
-            false,
-        )?))?;
+        let ualloc = Arc::pin_init(
+            Mutex::new(alloc::DefaultAllocator::new(
+                device,
+                &vm,
+                kernel_gpu_range,
+                buffer::PAGE_SIZE,
+                mmu::PROT_GPU_SHARED_RW,
+                512 * 1024,
+                true,
+                fmt!("File {} VM {} GPU Shared", file_id, id),
+                false,
+            )?),
+            GFP_KERNEL,
+        )?;
+        let ualloc_priv = Arc::pin_init(
+            Mutex::new(alloc::DefaultAllocator::new(
+                device,
+                &vm,
+                kernel_gpufw_range,
+                buffer::PAGE_SIZE,
+                mmu::PROT_GPU_FW_PRIV_RW,
+                64 * 1024,
+                true,
+                fmt!("File {} VM {} GPU FW Private", file_id, id),
+                false,
+            )?),
+            GFP_KERNEL,
+        )?;
 
         mod_dev_dbg!(
             device,
@@ -369,13 +378,16 @@ impl File {
             dummy_obj.map_at(&vm, mmu::IOVA_UNK_PAGE, mmu::PROT_GPU_SHARED_RW, true)?;
 
         mod_dev_dbg!(device, "[File {} VM {}]: VM created\n", file_id, id);
-        resv.store(Box::try_new(Vm {
-            ualloc,
-            ualloc_priv,
-            vm,
+        resv.store(Box::new(
+            Vm {
+                ualloc,
+                ualloc_priv,
+                vm,
             kernel_range,
-            _dummy_mapping: dummy_mapping,
-        })?)?;
+                _dummy_mapping: dummy_mapping,
+            },
+            GFP_KERNEL,
+        )?)?;
 
         data.vm_id = id;
 
@@ -693,7 +705,7 @@ impl File {
                 .new_queue(vm, ualloc, ualloc_priv, data.priority, data.queue_caps)?;
 
         data.queue_id = resv.index().try_into()?;
-        resv.store(Arc::pin_init(Mutex::new(queue))?)?;
+        resv.store(Arc::pin_init(Mutex::new(queue), GFP_KERNEL)?)?;
 
         Ok(0)
     }
@@ -807,7 +819,7 @@ impl File {
             data.queue_id,
             id
         );
-        let mut commands = Vec::try_with_capacity(data.command_count as usize)?;
+        let mut commands = Vec::with_capacity(data.command_count as usize, GFP_KERNEL)?;
 
         const STRIDE: usize = core::mem::size_of::<uapi::drm_asahi_command>();
         let size = STRIDE * data.command_count as usize;
@@ -823,7 +835,7 @@ impl File {
             unsafe { reader.read_raw(cmd.as_mut_ptr() as *mut u8, STRIDE)? };
 
             // SAFETY: All bit patterns in the struct are valid
-            commands.try_push(unsafe { cmd.assume_init() })?;
+            commands.push(unsafe { cmd.assume_init() }, GFP_KERNEL)?;
         }
 
         let ret = queue

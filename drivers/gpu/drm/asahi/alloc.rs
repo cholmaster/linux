@@ -627,7 +627,7 @@ impl Drop for HeapAllocation {
 
         alloc.with(|a| {
             if let Some(garbage) = a.garbage.as_mut() {
-                if garbage.try_push(node).is_err() {
+                if garbage.push(node, GFP_KERNEL).is_err() {
                     dev_err!(
                         &a.dev,
                         "HeapAllocation[{}]::drop: Failed to keep garbage\n",
@@ -771,7 +771,7 @@ impl HeapAllocator {
             garbage: if keep_garbage {
                 Some({
                     let mut v = Vec::new();
-                    v.try_reserve(128)?;
+                    v.reserve(128, GFP_KERNEL)?;
                     v
                 })
             } else {
@@ -825,7 +825,7 @@ impl HeapAllocator {
             })?;
 
         self.mm
-            .with_inner(|inner| inner.backing_objects.try_reserve(1))?;
+            .with_inner(|inner| inner.backing_objects.reserve(1, GFP_KERNEL))?;
 
         let mut new_top = self.top + size_aligned as u64;
         if self.cpu_maps {
@@ -859,7 +859,7 @@ impl HeapAllocator {
                 }
             };
 
-            self.guard_nodes.try_push(node)?;
+            self.guard_nodes.push(node, GFP_KERNEL)?;
 
             new_top += guard as u64;
         }
@@ -870,8 +870,11 @@ impl HeapAllocator {
             new_top
         );
 
-        self.mm
-            .with_inner(|inner| inner.backing_objects.try_push((obj, mapping, gpu_ptr)))?;
+        self.mm.with_inner(|inner| {
+            inner
+                .backing_objects
+                .push((obj, mapping, gpu_ptr), GFP_KERNEL)
+        })?;
 
         self.top = new_top;
 
@@ -1058,8 +1061,8 @@ impl Allocator for HeapAllocator {
                         for node in g.drain(0..block) {
                             inner.total_garbage -= node.size() as usize;
                             garbage
-                                .try_push(node)
-                                .expect("try_push() failed after reserve()");
+                                .push(node, GFP_KERNEL)
+                                .expect("push() failed after reserve()");
                         }
                     }
                 });

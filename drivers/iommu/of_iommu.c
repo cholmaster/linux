@@ -28,8 +28,6 @@ static int of_iommu_xlate(struct device *dev,
 	if ((ops && !ops->of_xlate) ||
 	    !of_device_is_available(iommu_spec->np))
 		return -ENODEV;
-	if (!ops)
-		return driver_deferred_probe_check_state(dev);
 
 	ret = iommu_fwspec_init(dev, fwnode, ops);
 	if (ret)
@@ -151,8 +149,6 @@ int of_iommu_configure(struct device *dev, struct device_node *master_np,
 					     of_pci_iommu_init, &info);
 	} else {
 		err = of_iommu_configure_device(master_np, dev, id);
-		if (err == -EPROBE_DEFER)
-			iommu_fwspec_free(dev);
 	}
 	mutex_unlock(&iommu_probe_device_lock);
 
@@ -189,7 +185,9 @@ iommu_resv_region_get_type(struct device *dev,
 	if (start == phys->start && end == phys->end)
 		return IOMMU_RESV_DIRECT;
 
-	return IOMMU_RESV_TRANSLATED;
+	dev_warn(dev, "treating non-direct mapping [%pr] -> [%pap-%pap] as reservation\n", phys,
+		 &start, &end);
+	return IOMMU_RESV_RESERVED;
 }
 
 /**
@@ -260,13 +258,8 @@ void of_iommu_get_resv_regions(struct device *dev, struct list_head *list)
 				}
 				type = iommu_resv_region_get_type(dev, &phys, iova, length);
 
-				if (type == IOMMU_RESV_TRANSLATED)
-					region = iommu_alloc_resv_region_tr(phys.start, iova, length, prot, type,
-								    GFP_KERNEL);
-				else
-					region = iommu_alloc_resv_region(iova, length, prot, type,
+				region = iommu_alloc_resv_region(iova, length, prot, type,
 								 GFP_KERNEL);
-
 				if (region)
 					list_add_tail(&region->list, list);
 			}

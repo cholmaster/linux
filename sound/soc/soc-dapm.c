@@ -2094,6 +2094,48 @@ static int dapm_power_widgets(struct snd_soc_card *card, int event)
 }
 
 #ifdef CONFIG_DEBUG_FS
+
+static const char * const snd_soc_dapm_type_name[] = {
+	[snd_soc_dapm_input]            = "input",
+	[snd_soc_dapm_output]           = "output",
+	[snd_soc_dapm_mux]              = "mux",
+	[snd_soc_dapm_demux]            = "demux",
+	[snd_soc_dapm_mixer]            = "mixer",
+	[snd_soc_dapm_mixer_named_ctl]  = "mixer_named_ctl",
+	[snd_soc_dapm_pga]              = "pga",
+	[snd_soc_dapm_out_drv]          = "out_drv",
+	[snd_soc_dapm_adc]              = "adc",
+	[snd_soc_dapm_dac]              = "dac",
+	[snd_soc_dapm_micbias]          = "micbias",
+	[snd_soc_dapm_mic]              = "mic",
+	[snd_soc_dapm_hp]               = "hp",
+	[snd_soc_dapm_spk]              = "spk",
+	[snd_soc_dapm_line]             = "line",
+	[snd_soc_dapm_switch]           = "switch",
+	[snd_soc_dapm_vmid]             = "vmid",
+	[snd_soc_dapm_pre]              = "pre",
+	[snd_soc_dapm_post]             = "post",
+	[snd_soc_dapm_supply]           = "supply",
+	[snd_soc_dapm_pinctrl]          = "pinctrl",
+	[snd_soc_dapm_regulator_supply] = "regulator_supply",
+	[snd_soc_dapm_clock_supply]     = "clock_supply",
+	[snd_soc_dapm_aif_in]           = "aif_in",
+	[snd_soc_dapm_aif_out]          = "aif_out",
+	[snd_soc_dapm_siggen]           = "siggen",
+	[snd_soc_dapm_sink]             = "sink",
+	[snd_soc_dapm_dai_in]           = "dai_in",
+	[snd_soc_dapm_dai_out]          = "dai_out",
+	[snd_soc_dapm_dai_link]         = "dai_link",
+	[snd_soc_dapm_kcontrol]         = "kcontrol",
+	[snd_soc_dapm_buffer]           = "buffer",
+	[snd_soc_dapm_scheduler]        = "scheduler",
+	[snd_soc_dapm_effect]           = "effect",
+	[snd_soc_dapm_src]              = "src",
+	[snd_soc_dapm_asrc]             = "asrc",
+	[snd_soc_dapm_encoder]          = "encoder",
+	[snd_soc_dapm_decoder]          = "decoder",
+};
+
 static ssize_t dapm_widget_power_read_file(struct file *file,
 					   char __user *user_buf,
 					   size_t count, loff_t *ppos)
@@ -2104,6 +2146,9 @@ static ssize_t dapm_widget_power_read_file(struct file *file,
 	int in, out;
 	ssize_t ret;
 	struct snd_soc_dapm_path *p = NULL;
+	const char *c_name;
+
+	BUILD_BUG_ON(ARRAY_SIZE(snd_soc_dapm_type_name) != SND_SOC_DAPM_TYPE_COUNT);
 
 	buf = kmalloc(PAGE_SIZE, GFP_KERNEL);
 	if (!buf)
@@ -2136,6 +2181,9 @@ static ssize_t dapm_widget_power_read_file(struct file *file,
 				w->sname,
 				w->active ? "active" : "inactive");
 
+	ret += scnprintf(buf + ret, PAGE_SIZE - ret, " widget-type %s\n",
+			 snd_soc_dapm_type_name[w->id]);
+
 	snd_soc_dapm_for_each_direction(dir) {
 		rdir = SND_SOC_DAPM_DIR_REVERSE(dir);
 		snd_soc_dapm_widget_for_each_path(w, dir, p) {
@@ -2145,11 +2193,13 @@ static ssize_t dapm_widget_power_read_file(struct file *file,
 			if (!p->connect)
 				continue;
 
+			c_name = p->node[rdir]->dapm->component ?
+				p->node[rdir]->dapm->component->name : NULL;
 			ret += scnprintf(buf + ret, PAGE_SIZE - ret,
-					" %s  \"%s\" \"%s\"\n",
+					" %s  \"%s\" \"%s\" \"%s\"\n",
 					(rdir == SND_SOC_DAPM_DIR_IN) ? "in" : "out",
 					p->name ? p->name : "static",
-					p->node[rdir]->name);
+					p->node[rdir]->name, c_name);
 		}
 	}
 
@@ -2202,139 +2252,6 @@ static const struct file_operations dapm_bias_fops = {
 	.llseek = default_llseek,
 };
 
-static ssize_t dapm_graph_read_file(struct file *file, char __user *user_buf,
-				    size_t count, loff_t *ppos)
-{
-	struct snd_soc_card *card = file->private_data;
-	struct snd_soc_dapm_context *dapm;
-	struct snd_soc_dapm_path *p;
-	struct snd_soc_dapm_widget *w;
-	struct snd_soc_pcm_runtime *rtd;
-	struct snd_soc_dapm_widget *wdone[16];
-	struct snd_soc_dai *dai;
-	int i, num_wdone = 0, cluster = 0;
-	char *buf;
-	ssize_t bufsize;
-	ssize_t ret = 0;
-
-	bufsize = 1024 * card->num_dapm_widgets;
-	buf = kmalloc(bufsize, GFP_KERNEL);
-	if (!buf)
-		return -ENOMEM;
-
-	mutex_lock(&card->dapm_mutex);
-
-#define bufprintf(...) \
-		ret += scnprintf(buf + ret, bufsize - ret, __VA_ARGS__)
-
-	bufprintf("digraph dapm {\n");
-
-	/*
-	 * Print the user-visible devices of the card.
-	 */
-	bufprintf("subgraph cluster_%d {\n", cluster++);
-	bufprintf("label=\"Devices\";style=filled;fillcolor=gray;\n");
-	for_each_card_rtds(card, rtd) {
-		if (rtd->dai_link->no_pcm)
-			continue;
-
-		bufprintf("w%pK [label=\"%d: %s\"];\n", rtd,
-			  rtd->pcm->device, rtd->dai_link->name);
-	}
-	bufprintf("};\n");
-
-	/*
-	 * Print the playback/capture widgets of DAIs just next to
-	 * the user-visible devices. Keep the list of already printed
-	 * widgets in 'wdone', so they will be skipped later.
-	 */
-	for_each_card_rtds(card, rtd) {
-		for_each_rtd_cpu_dais(rtd, i, dai) {
-			if (dai->stream[SNDRV_PCM_STREAM_PLAYBACK].widget) {
-				w = dai->stream[SNDRV_PCM_STREAM_PLAYBACK].widget;
-				bufprintf("w%pK [label=\"%s\"];\n", w, w->name);
-				if (!rtd->dai_link->no_pcm)
-					bufprintf("w%pK -> w%pK;\n", rtd, w);
-				wdone[num_wdone] = w;
-				if (num_wdone < ARRAY_SIZE(wdone))
-					num_wdone++;
-			}
-
-			if (dai->stream[SNDRV_PCM_STREAM_CAPTURE].widget) {
-				w = dai->stream[SNDRV_PCM_STREAM_CAPTURE].widget;
-				bufprintf("w%pK [label=\"%s\"];\n", w, w->name);
-				if (!rtd->dai_link->no_pcm)
-					bufprintf("w%pK -> w%pK;\n", w, rtd);
-				wdone[num_wdone] = w;
-				if (num_wdone < ARRAY_SIZE(wdone))
-					num_wdone++;
-			}
-		}
-	}
-
-	for_each_card_dapms(card, dapm) {
-		const char *prefix = soc_dapm_prefix(dapm);
-
-		if (dapm != &card->dapm) {
-			bufprintf("subgraph cluster_%d {\n", cluster++);
-			if (prefix)
-				bufprintf("label=\"%s\";\n", prefix);
-			else if (dapm->component)
-				bufprintf("label=\"%s\";\n",
-					  dapm->component->name);
-		}
-
-		for_each_card_widgets(dapm->card, w) {
-			const char *name = w->name;
-			bool skip = false;
-
-			if (w->dapm != dapm)
-				continue;
-
-			if (list_empty(&w->edges[0]) && list_empty(&w->edges[1]))
-				continue;
-
-			for (i = 0; i < num_wdone; i++)
-				if (wdone[i] == w)
-					skip = true;
-			if (skip)
-				continue;
-
-			if (prefix && strlen(name) > strlen(prefix) + 1)
-				name += strlen(prefix) + 1;
-
-			bufprintf("w%pK [label=\"%s\"];\n", w, name);
-		}
-
-		if (dapm != &card->dapm)
-			bufprintf("}\n");
-	}
-
-	list_for_each_entry(p, &card->paths, list) {
-		if (p->name)
-			bufprintf("w%pK -> w%pK [label=\"%s\"];\n",
-				  p->source, p->sink, p->name);
-		else
-			bufprintf("w%pK -> w%pK;\n", p->source, p->sink);
-	}
-
-	bufprintf("}\n");
-#undef bufprintf
-
-	mutex_unlock(&card->dapm_mutex);
-
-	ret = simple_read_from_buffer(user_buf, count, ppos, buf, ret);
-
-	kfree(buf);
-	return ret;
-}
-
-static const struct file_operations dapm_graph_fops = {
-	.open = simple_open,
-	.read = dapm_graph_read_file,
-	.llseek = default_llseek,
-};
-
 void snd_soc_dapm_debugfs_init(struct snd_soc_dapm_context *dapm,
 	struct dentry *parent)
 {
@@ -2345,10 +2262,6 @@ void snd_soc_dapm_debugfs_init(struct snd_soc_dapm_context *dapm,
 
 	debugfs_create_file("bias_level", 0444, dapm->debugfs_dapm, dapm,
 			    &dapm_bias_fops);
-
-	if (dapm == &dapm->card->dapm)
-		debugfs_create_file("graph.dot", 0444, dapm->debugfs_dapm,
-				    dapm->card, &dapm_graph_fops);
 }
 
 static void dapm_debugfs_add_widget(struct snd_soc_dapm_widget *w)

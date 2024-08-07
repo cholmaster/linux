@@ -6,8 +6,8 @@
 #
 
 ccflags-y += \
-	-I $(srctree)/$(src) \
-	-I $(srctree)/$(src)/../include
+	-I $(src) \
+	-I $(src)/../include
 
 obj-$(CONFIG_BRCMFMAC) += brcmfmac.o
 brcmfmac-objs += \
@@ -25,11 +25,7 @@ brcmfmac-objs += \
 		btcoex.o \
 		vendor.o \
 		pno.o \
-		join_param.o \
-		scan_param.o \
-		xtlv.o \
-		interface_create.o
-
+		xtlv.o
 brcmfmac-$(CONFIG_BRCMFMAC_PROTO_BCDC) += \
 		bcdc.o \
 		fwsignal.o

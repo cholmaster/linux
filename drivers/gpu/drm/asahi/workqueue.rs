@@ -24,6 +24,7 @@ use crate::{channel, driver, event, fw, gpu, object, regs};
 use core::num::NonZeroU64;
 use core::sync::atomic::Ordering;
 use kernel::{
+    alloc::{box_ext::BoxExt, flags::*, vec_ext::VecExt},
     c_str, dma_fence,
     error::code::*,
     prelude::*,
@@ -116,10 +117,13 @@ impl GpuContext {
     ) -> Result<GpuContext> {
         Ok(GpuContext {
             dev: dev.into(),
-            data: Some(Box::try_new(alloc.shared.new_object(
-                fw::workqueue::GpuContextData { _buffer: buffer },
-                |_inner| Default::default(),
-            )?)?),
+            data: Some(Box::new(
+                alloc.shared.new_object(
+                    fw::workqueue::GpuContextData { _buffer: buffer },
+                    |_inner| Default::default(),
+                )?,
+                GFP_KERNEL,
+            )?),
         })
     }
 
@@ -308,15 +312,21 @@ impl Job::ver {
             return Err(EINVAL);
         }
 
-        self.pending.try_push(Box::try_new(SubmittedWork::<_, _> {
-            object: command,
-            value: self.event_info.value.next(),
-            error: None,
-            callback: Some(callback),
-            wptr: 0,
-            vm_slot,
-            fence: self.fence.clone(),
-        })?)?;
+        self.pending.push(
+            Box::new(
+                SubmittedWork::<_, _> {
+                    object: command,
+                    value: self.event_info.value.next(),
+                    error: None,
+                    callback: Some(callback),
+                    wptr: 0,
+                    vm_slot,
+                    fence: self.fence.clone(),
+                },
+                GFP_KERNEL,
+            )?,
+            GFP_KERNEL,
+        )?;
 
         Ok(())
     }
@@ -419,7 +429,7 @@ impl Job::ver {
             return Err(EBUSY);
         }
 
-        inner.pending.try_reserve(command_count)?;
+        inner.pending.reserve(command_count, GFP_KERNEL)?;
 
         inner.last_submitted = inner.event.as_ref().map(|e| e.1);
 
@@ -431,11 +441,11 @@ impl Job::ver {
             inner.info.ring[wptr as usize] = command.gpu_va().get();
             wptr = next_wptr;
 
-            // Cannot fail, since we did a try_reserve(1) above
+            // Cannot fail, since we did a reserve(1) above
             inner
                 .pending
-                .try_push(command)
-                .expect("try_push() failed after try_reserve()");
+                .push(command, GFP_KERNEL)
+                .expect("push() failed after reserve()");
         }
 
         self.submitted = true;
@@ -657,14 +667,17 @@ impl WorkQueue::ver {
 
         let info_pointer = inner.info.weak_pointer();
 
-        Arc::pin_init(pin_init!(Self {
-            info_pointer,
-            inner <- match pipe_type {
-                PipeType::Vertex => Mutex::new_named(inner, c_str!("WorkQueue::inner (Vertex)")),
-                PipeType::Fragment => Mutex::new_named(inner, c_str!("WorkQueue::inner (Fragment)")),
-                PipeType::Compute => Mutex::new_named(inner, c_str!("WorkQueue::inner (Compute)")),
-            },
-        }))
+        Arc::pin_init(
+            pin_init!(Self {
+                info_pointer,
+                inner <- match pipe_type {
+                    PipeType::Vertex => Mutex::new_named(inner, c_str!("WorkQueue::inner (Vertex)")),
+                    PipeType::Fragment => Mutex::new_named(inner, c_str!("WorkQueue::inner (Fragment)")),
+                    PipeType::Compute => Mutex::new_named(inner, c_str!("WorkQueue::inner (Compute)")),
+                },
+            }),
+            GFP_KERNEL,
+        )
     }
 
     pub(crate) fn event_info(&self) -> Option<QueueEventInfo::ver> {
@@ -788,7 +801,7 @@ impl WorkQueue for WorkQueue::ver {
 
         let mut completed = Vec::new();
 
-        if completed.try_reserve(completed_commands).is_err() {
+        if completed.reserve(completed_commands, GFP_KERNEL).is_err() {
             pr_crit!(
                 "WorkQueue({:?}): Failed to allocate space for {} completed commands\n",
                 inner.pipe_type,
@@ -799,7 +812,7 @@ impl WorkQueue for WorkQueue::ver {
         let pipe_type = inner.pipe_type;
 
         for cmd in inner.pending.drain(..completed_commands) {
-            if completed.try_push(cmd).is_err() {
+            if completed.push(cmd, GFP_KERNEL).is_err() {
                 pr_crit!(
                     "WorkQueue({:?}): Failed to signal a completed command\n",
                     pipe_type,

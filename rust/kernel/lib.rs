@@ -12,16 +12,13 @@
 //! do so first instead of bypassing this crate.
 
 #![no_std]
-#![feature(allocator_api)]
 #![feature(associated_type_defaults)]
-#![feature(cfg_version)]
 #![feature(coerce_unsized)]
 #![feature(const_mut_refs)]
 #![feature(const_refs_to_cell)]
 #![feature(dispatch_from_dyn)]
 #![feature(duration_constants)]
 #![feature(new_uninit)]
-#![cfg_attr(not(version("1.77")), feature(offset_of))]
 #![feature(receiver_trait)]
 #![feature(type_alias_impl_trait)]
 #![feature(unsize)]
@@ -35,9 +32,7 @@ compile_error!("Missing kernel configuration for conditional compilation");
 // Allow proc-macros to refer to `::kernel` inside the `kernel` crate (this crate).
 extern crate self as kernel;
 
-#[cfg(not(test))]
-#[cfg(not(testlib))]
-mod allocator;
+pub mod alloc;
 
 mod build_assert;
 pub mod delay;
@@ -59,6 +54,7 @@ pub mod module_param;
 #[cfg(CONFIG_NET)]
 pub mod net;
 pub mod of;
+pub mod page;
 pub mod platform;
 pub mod prelude;
 pub mod print;
@@ -72,6 +68,7 @@ pub mod sync;
 pub mod task;
 pub mod time;
 pub mod types;
+pub mod uaccess;
 pub mod user_ptr;
 pub mod workqueue;
 pub mod xarray;
@@ -126,6 +123,13 @@ impl ThisModule {
     /// The pointer must be equal to the right `THIS_MODULE`.
     pub const unsafe fn from_ptr(ptr: *mut bindings::module) -> ThisModule {
         ThisModule(ptr)
+    }
+
+    /// Access the raw pointer for this module.
+    ///
+    /// It is up to the user to use it correctly.
+    pub const fn as_ptr(&self) -> *mut bindings::module {
+        self.0
     }
 
     /// Locks the module parameters to access them.
